@@ -1295,7 +1295,7 @@ application(struct TCP_ConnectionTable *tcpcon,
                      * Kludge
                      */
                     if (banner1->payloads.tcp[tcb->port_them] == &banner_ssl ||
-                            banner1->payloads.tcp[tcb->port_them] == &banner_ssl_12) {
+                            banner1->payloads.tcp[tcb->port_them] == &banner_tls_13) {
                         tcb->banner1_state.is_sent_sslhello = 1;
                     }
                     
