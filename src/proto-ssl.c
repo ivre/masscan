@@ -149,6 +149,7 @@ parse_server_hello(
         EXT_LEN0, EXT_LEN1,
         EXT_DATA,
         EXT_DATA_HEARTBEAT,
+        EXT_DATA_SUPPORTED_VERSIONS,
         UNKNOWN,
     };
 
@@ -268,6 +269,8 @@ parse_server_hello(
         remaining |= px[i];
         DROPDOWN(i,length,state);
   
+    /* Handling of the various TLS extensions */
+
     case EXT_TAG0:
     ext_tag:
         if (remaining < 4) {
@@ -290,27 +293,20 @@ parse_server_hello(
     case EXT_LEN1:
         hello->ext_remaining |= px[i];
         remaining--;
+        // Next step depends on the tag
         switch (hello->ext_tag) {
             case 0x000f: /* heartbeat */
                 state = EXT_DATA_HEARTBEAT;
                 continue;
+            case 0x002b: /* supported_versions */
+                state = EXT_DATA_SUPPORTED_VERSIONS;
+                continue;
         }
         DROPDOWN(i,length,state);
-        
-    case EXT_DATA:
-        if (hello->ext_remaining == 0) {
-            state = EXT_TAG0;
-            goto ext_tag;
-        }
-        if (remaining == 0) {
-            state = UNKNOWN;
-            continue;
-        }
-        remaining--;
-        hello->ext_remaining--;
-        continue;
 
+    case EXT_DATA:
     case EXT_DATA_HEARTBEAT:
+    case EXT_DATA_SUPPORTED_VERSIONS:
         if (hello->ext_remaining == 0) {
             state = EXT_TAG0;
             goto ext_tag;
@@ -321,10 +317,24 @@ parse_server_hello(
         }
         remaining--;
         hello->ext_remaining--;
-        if (px[i]) {
-            banout_append(  banout, PROTO_VULN, "SSL[heartbeat] ", 15);
+
+        switch (state) {
+            case EXT_DATA_HEARTBEAT:
+                if (px[i]) {
+                    banout_append(  banout, PROTO_VULN, "SSL[heartbeat] ", 15);
+                }
+                state = EXT_DATA;
+            case EXT_DATA_SUPPORTED_VERSIONS:
+                if (hello->ext_remaining) {
+                    hello->version_major = px[i];
+                } else {
+                    hello->version_minor = px[i];
+                    if ((hello->version_major<<8 | hello->version_minor) == 0x0304) { // TLS 1.3
+                        banout_replacefirst(banout, PROTO_SSL3, "TLS/1.2", "TLS/1.3");
+                    }
+                }
+            default:
         }
-        state = EXT_DATA;
         continue;
 
     
@@ -1070,74 +1080,48 @@ ssl_init(struct Banner1 *banner1)
  * TODO: we need to make this dynamically generated, so that users can
  * select various options.
  *****************************************************************************/
-static const char
+
+/*
+ * By setting the TLS record version to 1.0, and the ClientHello version to 1.2,
+ * this packet support for TLS 1.0, 1.1 and 1.2.
+ */
+
+static const unsigned char
 ssl_hello_template[] =
-"\x16\x03\x02\x01\x6f"          /* TLSv1.1 record layer */
+"\x16\x03\x01\x00\xc1"          /* TLSv1.0 record layer */
 "\x01" /* type = client-hello */
-"\x00\x01\x6b" /* length = 363 */
-"\x03\x02"      /* version = 3.02 (TLS 1.1) */
+"\x00\x00\xbd" /* length = 193 */
+"\x03\x03"      /* version = 3.03 (TLS 1.2) */
 
-"\x52\x48\xc5\x1a\x23\xf7\x3a\x4e\xdf\xe2\xb4\x82\x2f\xff\x09\x54" /* random */
-"\x9f\xa7\xc4\x79\xb0\x68\xc6\x13\x8c\xa4\x1c\x3d\x22\xe1\x1a\x98" /* TODO: re-randomize for each request, or at least on startup */
+"\x97\xe5\x60\x50\xc4\xa5\x4a\xe0\xb9\x01\x75\x15\x31\x23\x27\x68" /* random */
+"\x87\xdc\x3d\x66\xec\x07\xdc\xa0\xe5\x1f\x1f\xa1\x3f\x49\xf8\xfc" /* TODO: re-randomize for each request, or at least on startup */
 
-"\x20" /* session-id-length = 32 */
-"\x84\xb4\x2c\x85\xaf\x6e\xe3\x59\xbb\x62\x68\x6c\xff\x28\x3d\x27"  /* random */
-"\x3a\xa9\x82\xd9\x6f\xc8\xa2\xd7\x93\x98\xb4\xef\x80\xe5\xb9\x90"  /* TODO: re-randomize for each request, or at least on startup */
+"\x00"/* session-id-length = 0 */
 
-"\x00\x28" /* cipher suites length */
-"\xc0\x0a\xc0\x14\x00\x39\x00\x6b\x00\x35\x00\x3d\xc0\x07\xc0\x09"
-"\xc0\x23\xc0\x11\xc0\x13\xc0\x27\x00\x33\x00\x67\x00\x32\x00\x05"
-"\x00\x04\x00\x2f\x00\x3c\x00\x0a"
+"\x00\x3c" /* cipher suites length */
+"\xc0\x2b\xcc\xa9\xc0\x2c\xc0\x09\xc0\x0a\xc0\x23\xc0\x24\xc0\x2f"
+"\xcc\xa8\xc0\x30\xc0\x13\xc0\x14\xc0\x27\xc0\x28\x00\x9e\xcc\xaa"
+"\x00\x9f\x00\x33\x00\x39\x00\x67\x00\x6b\x00\x9c\x00\x9d\x00\x3c"
+"\x00\x3d\x00\x2f\x00\x35\x00\x0a\x00\x05\x00\xff"
 
 "\x01" /* compression-methods-length = 1 */
 "\x00"
 
-"\x00\xfa" /* extensions length */
-
-/* server name */
-"\xef\x00"
-"\x00\x1a"
-"\x00\x18\x00\x00\x15\x73\x79\x6e\x64\x69\x63\x61\x74\x69\x6f\x6e"
-"\x2e\x74\x77\x69\x6d\x67\x2e\x63\x6f\x6d"
-
-"\xff\x01"
-"\x00\x01"
-"\x00"
-
-"\x00\x0a"
-"\x00\x08"
-"\x00\x06\x00\x17\x00\x18\x00\x19"
-
-"\x00\x0b"
-"\x00\x02"
-"\x01\x00"
-
-"\x00\x23"
-"\x00\xb0"
-"\x81\x01\x19\x67\x60\x1e\x04\x42\x9a\xf3\xe2\x3c\x86\x58\x4f\x87"
-"\x69\x44\xb0\x1d\x8e\x01\xfa\xa5\x87\x3d\x5d\xdc\x16\x4c\xb4\x20"
-"\xda\xd3\x42\xb0\x88\xec\x0a\x13\xc3\xc6\x4c\x44\x74\x7d\xf5\x83"
-"\x93\xeb\x16\x60\x7e\x47\x07\x15\xae\x68\x3f\x32\xfc\x28\x71\xdd"
-"\x8d\x2a\xe0\x9e\x03\xad\x28\xd9\x89\x2f\x0f\x07\xaf\xc1\x27\x8e"
-"\xf1\x57\xfb\xc6\xc4\xd4\x56\x3a\xf6\xed\x59\x61\x4a\x17\x14\x0b"
-"\xd7\x7c\xae\xfe\x55\xd9\x7a\xa6\xf6\xc6\x57\xb5\x3c\xed\x78\x9d"
-"\xee\x39\xd8\x67\x02\x09\x92\xcb\xa5\x66\xa3\x48\x3d\x06\xed\xa5"
-"\x02\x2e\x9b\x16\xf6\x2b\xe7\x3f\x79\x65\x1a\xcb\x6c\x5c\xbd\x6b"
-"\xad\x11\xde\xbe\xdf\x35\xdb\x0b\xff\x2c\x90\x94\x32\xb5\x94\x57"
-"\x3d\x5e\x25\xd2\x1b\xd2\x44\x85\x96\x31\x28\x69\xd7\x4a\x13\x0a"
-"\x33\x74\x00\x00\x75\x4f\x00\x00\x00\x05\x00\x05\x01\x00\x00\x00"
-"\x00"
+"\x00\x58" /* extensions length = 88 */
+/* extensions */
+"\x00\x0b\x00\x04\x03\x00\x01\x02\x00\x0a\x00\x0c\x00\x0a\x00\x1d"
+"\x00\x17\x00\x1e\x00\x19\x00\x18\x00\x23\x00\x00\x00\x16\x00\x00"
+"\x00\x17\x00\x00\x00\x0d\x00\x30\x00\x2e\x04\x03\x05\x03\x06\x03"
+"\x08\x07\x08\x08\x08\x09\x08\x0a\x08\x0b\x08\x04\x08\x05\x08\x06"
+"\x04\x01\x05\x01\x06\x01\x03\x03\x02\x03\x03\x01\x02\x01\x03\x02"
+"\x02\x02\x04\x02\x05\x02\x06\x02"
 ;
 
-/*****************************************************************************
- * This is the template "Client Hello" packet that is sent to the server
- * to initiate the SSL connection. Right now, it's statically just transmitted
- * on to the wire.
- * TODO: we need to make this dynamically generated, so that users can
- * select various options.
- *****************************************************************************/
-static const char
-ssl_12_hello_template[] =
+/*
+ * If the previous packet didn't work, the server is most likely TLS 1.3 only.
+ */
+static const unsigned char
+tls_13_hello_template[] =
 "\x16\x03\x01\x01\x1a"
 "\x01"
 "\x00\x01\x16"
@@ -1457,13 +1441,16 @@ ssl_selftest(void)
  * This is the 'plugin' structure that registers callbacks for this parser in
  * the main system.
  *****************************************************************************/
-struct ProtocolParserStream banner_ssl_12 = {
-    "ssl", 443, ssl_12_hello_template, sizeof(ssl_12_hello_template)-1, 0,
+
+// if TLS 1.0-1.2 didn't work, try TLS 1.3
+struct ProtocolParserStream banner_tls_13 = {
+    "ssl", 443, tls_13_hello_template, sizeof(tls_13_hello_template)-1, 0,
     ssl_selftest,
     ssl_init,
     ssl_parse_record,
 };
 
+// this will be tried first: try TLS 1.0-TLS 1.2
 struct ProtocolParserStream banner_ssl = {
     "ssl", 443, ssl_hello_template, sizeof(ssl_hello_template)-1, 0,
     ssl_selftest,
@@ -1471,5 +1458,5 @@ struct ProtocolParserStream banner_ssl = {
     ssl_parse_record,
     0,
     0,
-    &banner_ssl_12,
+    &banner_tls_13,
 };
