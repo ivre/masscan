@@ -3,6 +3,14 @@
 [![Follow on Mastodon](https://img.shields.io/mastodon/follow/109349639355238149?domain=https%3A%2F%2Finfosec.exchange&style=social)](https://infosec.exchange/@ivre)
 [![Masscan unittests](https://github.com/ivre/masscan/actions/workflows/unittests.yml/badge.svg?branch=master)](https://github.com/ivre/masscan/actions/workflows/unittests.yml/?branch=master)
 
+# REPOSITORY ARCHIVED
+
+**All the fixes from this repository have been merged into the upstream
+& original repository [official
+repository](https://github.com/robertdavidgraham/masscan).**
+
+**Do not use this repository!**
+
 # MASSCAN: IVRE's fork
 
 This fork is maintained by the IVRE project. **If you are looking for
